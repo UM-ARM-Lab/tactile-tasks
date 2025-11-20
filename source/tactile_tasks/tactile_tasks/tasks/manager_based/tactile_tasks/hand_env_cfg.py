@@ -231,7 +231,7 @@ def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = Scene
             drive.CreateTypeAttr().Set("force")
             drive.CreateStiffnessAttr().Set(0.0)
             # Randomize damping slightly
-            damping = 1.0
+            damping = 0.1
             drive.CreateDampingAttr().Set(damping)
             #drive.CreateMaxForceAttr().Set(2.0)
         # axes = ["rotY"]
@@ -434,8 +434,11 @@ def _discover_random_screwdriver_usds() -> list[str]:
     Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
     """
     # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
-    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
-    pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
+    # base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
+    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/train"
+
+    # pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
+    pattern = os.path.join(base_dir, "*.usd")
     return sorted(glob.glob(pattern))
 
 
@@ -498,7 +501,7 @@ class ActionsCfg:
                                                 "allegro_hand_oya_finger_joint_13",
                                                 "allegro_hand_oya_finger_joint_14",
                                                 "allegro_hand_oya_finger_joint_15"],
-                                           scale=0.1,  # Reduced from 1.0 for stability
+                                           scale=1.0,  # Reduced from 1.0 for stability
                                            preserve_order=True,
                                            clip={"allegro_hand_hitosashi_finger_finger_joint_0": (-2.0, 2.0),
                                                  "allegro_hand_hitosashi_finger_finger_joint_1": (-2.0, 2.0),
@@ -1487,11 +1490,11 @@ class EventCfg:
     # )
     
     # # Prestartup: per-env geometry selection (safe USD edits before play)
-    # randomize_screwdriver_usd = EventTerm(
-    #     func=randomize_screwdriver_geometry_prestartup,
-    #     mode="prestartup",
-    #     params={"asset_cfg": SceneEntityCfg("screwdriver")},
-    # )
+    randomize_screwdriver_usd = EventTerm(
+        func=randomize_screwdriver_geometry_prestartup,
+        mode="prestartup",
+        params={"asset_cfg": SceneEntityCfg("screwdriver")},
+    )
 
     # # Prestartup: randomize physics material friction for screwdriver colliders
     # randomize_screwdriver_friction = EventTerm(

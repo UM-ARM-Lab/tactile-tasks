@@ -14,7 +14,8 @@ CURRENT_DIR = str(pathlib.Path(__file__).resolve().parent)
 @configclass
 class AllegroCfg(ArticulationCfg):
     spawn = sim_utils.UsdFileCfg(
-            usd_path = f'/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/arm_allegro_ft.usd',
+            # usd_path = f'/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/arm_allegro_ft.usd',
+            usd_path = f'/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/allegro/arm_allegro.usd',
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             rigid_body_enabled=True,
@@ -82,8 +83,8 @@ class AllegroCfg(ArticulationCfg):
                 joint_names_expr = [".*"],
                 effort_limit = 400.0,
                 velocity_limit = 100.0,
-                stiffness = 50.0,
-                damping = 5.0,
+                stiffness = 5.0,
+                damping = 0.5,
                 friction = 1.0,
                 ),
         }
