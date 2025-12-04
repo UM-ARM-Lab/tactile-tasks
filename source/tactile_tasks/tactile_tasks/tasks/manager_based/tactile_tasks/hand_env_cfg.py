@@ -25,6 +25,12 @@ from isaaclab.scene import InteractiveSceneCfg, InteractiveScene
 from isaacsim.core.utils.stage import get_current_stage
 from isaaclab.utils import configclass
 from pxr import Usd, Sdf, UsdGeom, UsdPhysics, PhysxSchema, Gf
+from isaacsim.core.utils.prims import create_prim
+
+
+import trimesh
+import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 import torch
 import isaaclab.envs.mdp as mdp
@@ -34,12 +40,122 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sensors.camera import TiledCameraCfg
 from isaaclab.sensors.camera.utils import create_pointcloud_from_depth
 import os
+# Remove 'import trimesh'
+from isaaclab.utils.math import transform_points
+from .pointcloud_util import sample_mesh_points, MeshSampler # Import the helper we just made
 import glob
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 from .arm_allegro import AllegroCfg
 from .screwdriver import ScrewdriverCfg
+
+
+def visualize_ground_truth_pcd(env, env_ids, asset_cfg=None):
+    """
+    Debugs the point cloud by drawing spheres in the viewport 
+    for all environments (or specified env_ids).
+    """
+    # Use env_ids if provided, otherwise visualize all environments
+    if env_ids is None:
+        env_ids_to_vis = torch.arange(env.num_envs, device=env.device)
+    else:
+        env_ids_to_vis = env_ids if isinstance(env_ids, torch.Tensor) else torch.tensor(env_ids, device=env.device)
+
+    # CHANGE: Access sampler via env.scene
+    if not hasattr(env.scene, "pc_sampler"):
+        print("[DEBUG_VIS] No pc_sampler found on env.scene.")
+        return
+
+    # Get point clouds for ALL environments
+    robot_states = env.scene["robot"].data.body_state_w  # (num_envs, num_bodies, 7)
+    origin_zero = torch.zeros((env.num_envs, 3), device=env.device)
+    
+    # Get point clouds for all environments
+    robot_pts_all = env.scene.pc_sampler.get_articulation_pcd(robot_states, origin_zero)
+    
+    # Screwdriver
+    screw = env.scene["screwdriver"]
+    screw_pos_all = screw.data.root_pos_w  # (num_envs, 3)
+    screw_quat_all = screw.data.root_quat_w  # (num_envs, 4)
+    
+    screw_pts_all = env.scene.pc_sampler.get_rigid_pcd(screw_pos_all, screw_quat_all, origin_zero)
+    
+    # Combine: (num_envs, num_points, 3)
+    all_pts_all_envs = torch.cat([robot_pts_all, screw_pts_all], dim=1)  # (num_envs, total_points, 3)
+
+    # 3. Draw in USD Stage
+    stage = get_current_stage()
+    debug_root = "/World/Debug/PCD_Vis"
+    
+    # Create a container prim if it doesn't exist
+    if not stage.GetPrimAtPath(debug_root):
+        stage.DefinePrim(debug_root, "Scope")
+
+    # Downsample! Drawing too many spheres is slow. Draw every 20th point.
+    stride = 20 
+    
+    # Visualize each environment with different colors
+    colors = [
+        (1.0, 0.0, 0.0),  # Red for env 0
+        (0.0, 1.0, 0.0),  # Green for env 1
+        (0.0, 0.0, 1.0),  # Blue for env 2
+        (1.0, 1.0, 0.0),  # Yellow for env 3
+        (1.0, 0.0, 1.0),  # Magenta for env 4
+        (0.0, 1.0, 1.0),  # Cyan for env 5
+    ]
+    
+    for env_idx_tensor in env_ids_to_vis:
+        env_idx = env_idx_tensor.item()
+        if env_idx >= env.num_envs:
+            continue
+            
+        # Get points for this environment
+        all_pts = all_pts_all_envs[env_idx].cpu().numpy()  # (num_points, 3)
+        
+        # Check for NaN or invalid points
+        valid_mask = ~np.isnan(all_pts).any(axis=1) & np.isfinite(all_pts).all(axis=1)
+        valid_pts = all_pts[valid_mask]
+        
+        subset_pts = valid_pts[::stride]
+        
+        # Use different color for each environment (cycle through colors)
+        color = colors[env_idx % len(colors)]
+        
+        # Clear old prims for this environment before creating new ones
+        env_debug_root = f"{debug_root}/env_{env_idx}"
+        env_prim = stage.GetPrimAtPath(env_debug_root)
+        if env_prim.IsValid():
+            # Remove all children (old point prims)
+            with Sdf.ChangeBlock():
+                children = list(env_prim.GetChildren())
+                for child in children:
+                    stage.RemovePrim(child.GetPath())
+        else:
+            # Create the environment scope if it doesn't exist
+            stage.DefinePrim(env_debug_root, "Scope")
+        for i, pt in enumerate(subset_pts):
+            prim_path = f"{env_debug_root}/pt_{i}"
+            
+            # Define the sphere
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                sphere = UsdGeom.Sphere.Define(stage, prim_path)
+                sphere.CreateRadiusAttr(0.005) # 0.5cm radius (Adjust if too big/small)
+                
+                # Set color based on environment
+                sphere.CreateDisplayColorAttr([color]) 
+                
+                # Add translation op
+                UsdGeom.Xformable(sphere).AddTranslateOp()
+                prim = sphere.GetPrim()
+
+            # Update Position
+            xform = UsdGeom.Xformable(prim)
+            # We assume the first op is translate because we just added it
+            ops = xform.GetOrderedXformOps()
+            if ops:
+                ops[0].Set(Gf.Vec3d(float(pt[0]), float(pt[1]), float(pt[2])))
 
 # Scene definition
 # from hand_scene import AllegroSceneCfg
@@ -79,6 +195,27 @@ class AllegroSceneCfg(InteractiveSceneCfg):
 @configclass
 class AllegroSceneWithCameraCfg(InteractiveSceneCfg):
     """Configuration for the screwdriver scene with tiled camera for point cloud extraction."""
+    
+    
+    def _setup(self):
+            super()._setup()
+            
+            # --- INITIALIZE SAMPLER HERE ---
+            print("[AllegroScene] Initializing Point Cloud Sampler...")
+            self.pc_sampler = MeshSampler(device=self.device)
+            
+            # Sample Screwdriver (Rigid)
+            # Note: We use env_0 template path
+            self.pc_sampler.sample_rigid_object("/World/envs/env_0/Screwdriver")
+            
+            # Sample Robot (Articulation)
+            # We pass self.robot (the Articulation object created by super()._setup())
+            if hasattr(self, "robot"):
+                self.pc_sampler.sample_articulation("/World/envs/env_0/Robot", self.robot)
+            # -------------------------------
+            
+            # After screwdriver is spawned but before cloning envs, author the joint
+            stage = self.stage
 
     # Allow per-environment USD differences so we can swap geometry references
     replicate_physics = False
@@ -107,28 +244,28 @@ class AllegroSceneWithCameraCfg(InteractiveSceneCfg):
         force_threshold = 0.01,  # Lower threshold to visualize smaller contact forces (default is typically 1.0)
     )
     
-    # Tiled camera for point cloud extraction
-    tiled_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/Camera",
-        update_period=0.0,  # Non-zero update period
-        data_types=["rgb", "distance_to_image_plane"],  # RGB and depth for logging
-        width=32, height=32,  # Slightly larger resolution
-        colorize_semantic_segmentation=False,
-        colorize_instance_segmentation=False,
-        colorize_instance_id_segmentation=False,
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0, 
-            focus_distance=400.0,
-            horizontal_aperture=20.955, 
-            clipping_range=(0.05, 5.0),  # Closer near plane to see nearby objects
-        ),
-        offset=TiledCameraCfg.OffsetCfg(
-            pos=(-0.2, 0.3, 0.3),  # Closer position to the side (Y axis) at hand height
-            rot=(0.224144, -0.129410, 0.836516, -0.482963),  # Rotated 180° around Z axis from previous orientation
-            convention="ros",
-        ),
-        debug_vis=False,  # Disable debug visualization
-    )
+    # # Tiled camera for point cloud extraction
+    # tiled_camera: TiledCameraCfg = TiledCameraCfg(
+    #     prim_path="{ENV_REGEX_NS}/Camera",
+    #     update_period=0.0,  # Non-zero update period
+    #     data_types=["rgb", "distance_to_image_plane"],  # RGB and depth for logging
+    #     width=32, height=32,  # Slightly larger resolution
+    #     colorize_semantic_segmentation=False,
+    #     colorize_instance_segmentation=False,
+    #     colorize_instance_id_segmentation=False,
+    #     spawn=sim_utils.PinholeCameraCfg(
+    #         focal_length=24.0, 
+    #         focus_distance=400.0,
+    #         horizontal_aperture=20.955, 
+    #         clipping_range=(0.05, 5.0),  # Closer near plane to see nearby objects
+    #     ),
+    #     offset=TiledCameraCfg.OffsetCfg(
+    #         pos=(-0.2, 0.3, 0.3),  # Closer position to the side (Y axis) at hand height
+    #         rot=(0.224144, -0.129410, 0.836516, -0.482963),  # Rotated 180° around Z axis from previous orientation
+    #         convention="ros",
+    #     ),
+    #     debug_vis=False,  # Disable debug visualization
+    # )
 
 
 def add_spherical_joint_at_tip(stage: Usd.Stage,
@@ -170,6 +307,14 @@ class AllegroScene(InteractiveScene):
         # After screwdriver is spawned but before cloning envs, author the joint
         stage = self.stage
         
+
+
+class AllegroSceneWithCamera(InteractiveScene):
+    """Scene class - pc_sampler will be initialized via startup event."""
+    
+    def __init__(self, cfg: AllegroSceneWithCameraCfg, *args, **kwargs):
+        super().__init__(cfg, *args, **kwargs)
+        self.pc_sampler = None
 
 
 def setup_screwdriver_tip_pivots(env, env_ids, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> None:
@@ -433,13 +578,146 @@ def _discover_random_screwdriver_usds() -> list[str]:
 
     Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
     """
-    # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
+    base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
     # base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
-    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/train"
+    #base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/train"
 
-    # pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
-    pattern = os.path.join(base_dir, "*.usd")
+    pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
+    #pattern = os.path.join(base_dir, "*.usd")
     return sorted(glob.glob(pattern))
+
+
+# POINTCLOUD STUFF ###################################################################
+
+# Helper: Extracts LOCAL points from a USD prim
+def _extract_local_points_from_prim(prim, num_samples=1024):
+    if not prim.IsValid() or not prim.IsA(UsdGeom.Mesh):
+        return torch.zeros((num_samples, 3))
+
+    mesh_geom = UsdGeom.Mesh(prim)
+    points = np.array(mesh_geom.GetPointsAttr().Get())
+    face_indices = np.array(mesh_geom.GetFaceVertexIndicesAttr().Get())
+    face_counts = np.array(mesh_geom.GetFaceVertexCountsAttr().Get())
+
+    # Robust Triangulation
+    if np.all(face_counts == 3):
+        faces = face_indices.reshape(-1, 3)
+    else:
+        triangulated_faces = []
+        current_idx = 0
+        for count in face_counts:
+            for i in range(count - 2):
+                triangulated_faces.append([
+                    face_indices[current_idx],
+                    face_indices[current_idx + i + 1],
+                    face_indices[current_idx + i + 2]
+                ])
+            current_idx += count
+        faces = np.array(triangulated_faces)
+
+    # Sample
+    tm = trimesh.Trimesh(vertices=points, faces=faces)
+    sampled, _ = trimesh.sample.sample_surface(tm, num_samples)
+    
+    # Return as float32 tensor
+    return torch.tensor(sampled, dtype=torch.float32)
+
+
+def ground_truth_pcd_obs(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")) -> torch.Tensor:
+    """
+    Returns Ground Truth Point Cloud (Env Frame).
+    Expected output: (num_envs, 1024 * 3) = (num_envs, 3072)
+    """
+    # Expected point cloud size from config: 1024 points * 3 channels = 3072
+    TARGET_NUM_POINTS = 1024
+    TARGET_DIM = TARGET_NUM_POINTS * 3
+    
+    # Check if sampler exists on scene
+    if not hasattr(env.scene, "pc_sampler"):
+        # Return zeros with correct shape
+        return torch.zeros((env.num_envs, TARGET_DIM), device=env.device)
+
+    # 1. Robot Cloud
+    robot_states = env.scene["robot"].data.body_state_w
+    robot_pcd = env.scene.pc_sampler.get_articulation_pcd(robot_states, env.scene.env_origins)
+    
+    # 2. Screwdriver Cloud
+    screw = env.scene["screwdriver"]
+    screw_pcd = env.scene.pc_sampler.get_rigid_pcd(
+        screw.data.root_pos_w, 
+        screw.data.root_quat_w, 
+        env.scene.env_origins
+    )
+    
+    # 3. Combine: (num_envs, num_robot_points + num_screwdriver_points, 3)
+    full_pcd = torch.cat([robot_pcd, screw_pcd], dim=1)
+    
+    # 4. Downsample to exactly TARGET_NUM_POINTS if needed
+    num_points = full_pcd.shape[1]
+    if num_points > TARGET_NUM_POINTS:
+        # Randomly sample TARGET_NUM_POINTS
+        indices = torch.randperm(num_points, device=env.device)[:TARGET_NUM_POINTS]
+        full_pcd = full_pcd[:, indices, :]
+    elif num_points < TARGET_NUM_POINTS:
+        # Repeat points to reach target (pad with last point if needed)
+        repeat_count = TARGET_NUM_POINTS - num_points
+        extra_points = full_pcd[:, -1:, :].repeat(1, repeat_count, 1)
+        full_pcd = torch.cat([full_pcd, extra_points], dim=1)
+    
+    # 5. Flatten to (num_envs, TARGET_NUM_POINTS * 3)
+    return full_pcd.reshape(env.num_envs, -1)
+##################################################################################
+
+
+def initialize_pointcloud_sampler(env, env_ids) -> None:
+    """Initialize point cloud sampler on the scene using a startup event."""
+    # Only initialize if not already initialized
+    if not hasattr(env.scene, "pc_sampler") or env.scene.pc_sampler is None:
+        print("[initialize_pointcloud_sampler] Initializing Point Cloud Sampler...")
+        env.scene.pc_sampler = MeshSampler(device=env.device)
+        
+        # Sample Screwdriver (Rigid) - per environment since geometry differs
+        print(f"[initialize_pointcloud_sampler] Sampling screwdriver for {env.num_envs} environments...")
+        for env_idx in range(env.num_envs):
+            screwdriver_prim_path = f"/World/envs/env_{env_idx}/Screwdriver"
+            env.scene.pc_sampler.sample_rigid_object(screwdriver_prim_path, num_samples=512, env_idx=env_idx)
+        
+        # Verify screwdriver sampling
+        if env.scene.pc_sampler.rigid_points_per_env:
+            total_sampled = len(env.scene.pc_sampler.rigid_points_per_env)
+            num_screw_pts = next(iter(env.scene.pc_sampler.rigid_points_per_env.values())).shape[0]
+            print(f"[initialize_pointcloud_sampler] Screwdriver sampled: {total_sampled} environments, {num_screw_pts} points per env")
+        else:
+            print("[initialize_pointcloud_sampler] ERROR: Screwdriver sampling failed")
+        
+        # Sample Robot (Articulation)
+        robot_obj = None
+        if hasattr(env.scene, "articulations") and "robot" in env.scene.articulations:
+            robot_obj = env.scene.articulations["robot"]
+        elif "robot" in env.scene:
+            robot_obj = env.scene["robot"]
+        
+        if robot_obj is not None:
+            print("[initialize_pointcloud_sampler] Sampling robot...")
+            # Sample exactly 512 points per environment for the hand only
+            env.scene.pc_sampler.sample_articulation(
+                "/World/envs/env_0/Robot", 
+                robot_obj, 
+                num_samples_per_env=512,
+                hand_only=True
+            )
+            
+            if env.scene.pc_sampler.link_points:
+                total_robot_pts = sum(pts.shape[1] for pts in env.scene.pc_sampler.link_points.values())
+                print(f"[initialize_pointcloud_sampler] Robot sampled: {total_robot_pts} points")
+            else:
+                print("[initialize_pointcloud_sampler] ERROR: Robot sampling failed")
+        else:
+            print("[initialize_pointcloud_sampler] WARNING: Robot not found")
+        
+        print("[initialize_pointcloud_sampler] Point Cloud Sampler initialized successfully")
+    else:
+        print("[initialize_pointcloud_sampler] pc_sampler already initialized")
 
 
 def randomize_screwdriver_geometry_prestartup(
@@ -448,13 +726,9 @@ def randomize_screwdriver_geometry_prestartup(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
     usd_paths: list[str] | None = None,
 ) -> None:
-    """Swap each env's screwdriver USD reference before play starts (root-level properties persist).
-
-    Operates on USD references only (safe at prestartup). Requires replicate_physics == False.
-    """
+    """Swaps USDs AND caches local point cloud data using Warp."""
     stage = get_current_stage()
     asset = env.scene[asset_cfg.name]
-    # Resolve per-env prims from regex prim path
     prim_paths = sim_utils.find_matching_prim_paths(asset.cfg.prim_path)
 
     if not usd_paths:
@@ -462,13 +736,23 @@ def randomize_screwdriver_geometry_prestartup(
     if not usd_paths:
         return
 
+    # Initialize storage for local points if it doesn't exist
+    # Shape: (num_envs, 1024, 3)
+    if not hasattr(env, "screwdriver_local_points"):
+        env.screwdriver_local_points = torch.zeros((env.num_envs, 1024, 3), device=env.device)
+
     env_indices = list(range(len(prim_paths))) if env_ids is None else env_ids.tolist()
+    
+    # We will collect updates to perform them in bulk if possible, 
+    # but since USD references are per-prim, we loop.
     with Sdf.ChangeBlock():
         for env_i in env_indices:
             prim_path = prim_paths[env_i]
             prim = stage.GetPrimAtPath(prim_path)
             if not prim.IsValid():
                 continue
+            
+            # 1. Swap Reference
             if prim.IsInstanceable():
                 prim.SetInstanceable(False)
             refs = prim.GetReferences()
@@ -476,6 +760,13 @@ def randomize_screwdriver_geometry_prestartup(
             usd_path = usd_paths[choice_idx]
             refs.ClearReferences()
             refs.AddReference(usd_path)
+
+            # 2. Sample Mesh (Using Warp instead of Trimesh)
+            # We sample 1024 points for this specific screwdriver variation
+            local_pc = sample_mesh_points(prim_path, num_samples=1024, device=env.device)
+            
+            # Store in the master environment tensor
+            env.screwdriver_local_points[env_i] = local_pc
 
 @configclass
 class ActionsCfg:
@@ -1303,13 +1594,11 @@ class PointCloudObservationCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        """Observations for policy group including contact forces."""
-
-        # observation terms (order preserved)
+        # Replace the old camera function with the new Ground Truth function
         point_cloud = ObsTerm(
-            func=point_cloud_obs,
+            func=ground_truth_pcd_obs,  # <--- Point to new function
             noise=None,
-            params={"sensor_cfg": SceneEntityCfg("tiled_camera")},
+            params={"asset_cfg": SceneEntityCfg("screwdriver")}, # Points to Object, not Camera
         )
 
         joint_pos = ObsTerm(func=joint_pos_in_order, noise=None, 
@@ -1538,8 +1827,22 @@ class EventCfg:
         func=add_screwdriver_rotation_markers,
         mode="reset",
         params={"asset_cfg": SceneEntityCfg("screwdriver")},
+        
+        
+    )
+    
+    debug_pcd_visualization = EventTerm(
+        func=visualize_ground_truth_pcd,
+        mode="interval",
+        interval_range_s=(0.05, 0.05), # Update every 0.05 seconds (20 FPS)
     )
 
+    # Initialize point cloud sampler at startup
+    initialize_pc_sampler = EventTerm(
+        func=initialize_pointcloud_sampler,
+        mode="startup",
+    )
+    
     # Ensure markers are visible immediately at startup (not only after first reset)
     create_rotation_markers_startup = EventTerm(
         func=add_screwdriver_rotation_markers,
@@ -1817,6 +2120,7 @@ class TestPointCloudEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physx.solver_position_iteration_count = 16
         self.sim.physx.solver_velocity_iteration_count = 4
+
 
 
 
