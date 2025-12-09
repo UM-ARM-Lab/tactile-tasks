@@ -3,12 +3,72 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Script to play a checkpoint if an RL agent from RL-Games, with extra metrics."""
+"""Script to play a checkpoint if an RL agent from RL-Games, with cleaned up metrics for rotation and drops."""
 
-"""Launch Isaac Sim Simulator first."""
+# ==================================================================================================
+#  FIX: GLIBCXX COMPATIBILITY SHIM
+#  This block forces the script to use the system libstdc++ instead of the incompatible Conda one.
+#  This must be at the VERY TOP before any other imports (even argparse or isaaclab).
+# ==================================================================================================
+import os
+import sys
+
+def _enforce_system_libstdcxx():
+    """
+    Detects if the incompatible Conda libstdc++ is active and forces a reload
+    using the system library via LD_PRELOAD.
+    """
+    if sys.platform != "linux":
+        return
+
+    # Prevent infinite recursion if the fix is already applied
+    if os.environ.get("ISAAC_GLIBCXX_FIXED") == "1":
+        return
+
+    # Common paths for the system libstdc++ on Ubuntu 20.04/22.04
+    candidates = [
+        "/usr/lib/x86_64-linux-gnu/libstdc++.so.6",
+        "/usr/lib64/libstdc++.so.6"
+    ]
+    
+    system_lib = None
+    for path in candidates:
+        if os.path.exists(path):
+            system_lib = path
+            break
+
+    if system_lib:
+        # Check if we are currently running without the preload
+        current_preload = os.environ.get("LD_PRELOAD", "")
+        if system_lib not in current_preload:
+            print(f"[GLIBC FIX] Restarting script with system libstdc++: {system_lib}")
+            
+            # Update environment variables
+            new_env = os.environ.copy()
+            new_env["LD_PRELOAD"] = f"{system_lib}:{current_preload}" if current_preload else system_lib
+            new_env["ISAAC_GLIBCXX_FIXED"] = "1"
+            
+            # Restart the current script with the new environment
+            try:
+                os.execvpe(sys.executable, [sys.executable] + sys.argv, new_env)
+            except OSError as e:
+                print(f"[GLIBC FIX] Failed to restart: {e}")
+                # If restart fails, we just continue and hope for the best
+    else:
+        print("[GLIBC FIX] Warning: Could not find system libstdc++.so.6. Continuing without fix.")
+
+# Run the fix immediately
+_enforce_system_libstdcxx()
+# ==================================================================================================
+
 
 import argparse
-import sys
+import math
+import random
+import time
+import torch
+import csv
+import gymnasium as gym
 
 from isaaclab.app import AppLauncher
 
@@ -16,111 +76,51 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent from RL-Games (with metrics).")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument(
-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
-)
+parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument(
-    "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
-)
+parser.add_argument("--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument(
-    "--use_pretrained_checkpoint",
-    action="store_true",
-    help="Use the pre-trained checkpoint from Nucleus.",
-)
-parser.add_argument(
-    "--use_last_checkpoint",
-    action="store_true",
-    help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
-)
+parser.add_argument("--use_pretrained_checkpoint", action="store_true", help="Use the pre-trained checkpoint from Nucleus.")
+parser.add_argument("--use_last_checkpoint", action="store_true", help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
-parser.add_argument("--samples", type=int, default=1000, help="Number of metric samples to collect, then stop.")
-parser.add_argument(
-    "--metrics_out",
-    type=str,
-    default=None,
-    help="Optional CSV path for per-step metrics (yaw_rate, drop_rate, avg_net_yaw_wrapped, avg_turns).",
-)
-parser.add_argument(
-    "--runs",
-    type=int,
-    default=None,
-    help="Optional number of completed episodes (across envs) to collect before stopping.",
-)
-parser.add_argument(
-    "--drop_tip_thresh",
-    type=float,
-    default=0.003,
-    help="Drop detection threshold (m) for screwdriver tip height above env origin.",
-)
-parser.add_argument(
-    "--log_fall_envs",
-    action="store_true",
-    help="When set, print environment indices that experience a fall event.",
-)
-parser.add_argument(
-    "--fall_angle_deg",
-    type=float,
-    default=19.0,
-    help="Angle threshold (deg) for fall detection based on |pitch| or |roll|.",
-)
+parser.add_argument("--metrics_out", type=str, default="metrics_summary.csv", help="CSV path for per-episode metrics.")
+parser.add_argument("--runs", type=int, default=50, help="Number of completed episodes to collect before stopping.")
+parser.add_argument("--fall_angle_deg", type=float, default=19.0, help="Angle threshold (deg) for drop detection.")
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
+
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
+
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-
-import gymnasium as gym
-import math
-import os
-import random
-import time
-import torch
-import csv
-
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
 from rl_games.torch_runner import Runner
 
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
+from isaaclab.envs import DirectMARLEnv, DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg, multi_agent_to_single_agent
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
-
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
-
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
-
 import tactile_tasks.tasks  # noqa: F401
-from isaaclab.utils.math import matrix_from_quat, quat_apply
-try:
-    # Optional: for tip offset
-    from tactile_tasks.tactile_tasks.tasks.manager_based.tactile_tasks.screwdriver import ScrewdriverCfg  # type: ignore
-except Exception:  # pragma: no cover
-    ScrewdriverCfg = None
-
+from isaaclab.utils.math import matrix_from_quat
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -138,14 +138,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         args_cli.seed = random.randint(0, 10000)
 
     agent_cfg["params"]["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["params"]["seed"]
-    # set the environment seed (after multi-gpu config for updated rank from agent seed)
-    # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg["params"]["seed"]
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
+
     # find checkpoint
     if args_cli.use_pretrained_checkpoint:
         resume_path = get_published_pretrained_checkpoint("rl_games", train_task_name)
@@ -153,18 +152,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print("[INFO] Unfortunately a pre-trained checkpoint is currently unavailable for this task.")
             return
     elif args_cli.checkpoint is None:
-        # specify directory for logging runs
         run_dir = agent_cfg["params"]["config"].get("full_experiment_name", ".*")
-        # specify name of checkpoint
         if args_cli.use_last_checkpoint:
             checkpoint_file = ".*"
         else:
-            # this loads the best checkpoint
             checkpoint_file = f"{agent_cfg['params']['config']['name']}.pth"
-        # get path to previous checkpoint
         resume_path = get_checkpoint_path(log_root_path, run_dir, checkpoint_file, other_dirs=["nn"])
     else:
         resume_path = retrieve_file_path(args_cli.checkpoint)
+    
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
     # wrap around environment for rl-games
@@ -175,11 +171,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
-    # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # wrap for video recording
     if args_cli.video:
         video_kwargs = {
             "video_folder": os.path.join(log_root_path, log_dir, "videos", "play"),
@@ -191,350 +185,223 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rl-games
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
 
-    # register the environment to rl-games registry
-    # note: in agents configuration: environment name must be "rlgpu"
     vecenv.register(
         "IsaacRlgWrapper", lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs)
     )
     env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
 
-    # load previously trained model
     agent_cfg["params"]["load_checkpoint"] = True
     agent_cfg["params"]["load_path"] = resume_path
     print(f"[INFO]: Loading model checkpoint from: {agent_cfg['params']['load_path']}")
 
-    # set number of actors into agent config
     agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs
-    # create runner from rl-games
     runner = Runner()
     runner.load(agent_cfg)
-    # obtain the agent from the runner
     agent: BasePlayer = runner.create_player()
     agent.restore(resume_path)
     agent.reset()
 
-    dt = env.unwrapped.step_dt
     base_env = env.unwrapped
+    dt = base_env.step_dt
+    num_envs = base_env.num_envs
+    device = base_env.device
 
-    # metrics (windowed averages)
-    log_interval = 100  # steps
-    rot_avg_accum = 0.0
-    drop_avg_accum = 0.0
-    window_steps = 0
-    # per-step metric buffers for collating
-    yaw_rate_series = []  # list[float]
-    drop_rate_series = []  # list[float]
-    net_yaw_series = []  # list[float], avg across envs at each step (wrapped)
-    net_yaw_unwrapped_series = []  # list[float], mean of yaw_cumulative (unwrapped)
-    mean_signed_yaw_rate_series = []  # list[float], per-step mean signed yaw rate
-    net_yaw_from_mean_series = []  # list[float], integrated mean signed yaw rate
-    # integrated signed yaw per-env (radians)
-    yaw_cumulative = None
-    # track which envs were done in previous step (to reset yaw_cumulative at start of new trial)
-    prev_done_mask = None
-    # total completed episodes across envs (for --runs)
-    run_count = 0
-    # fall event tracking
-    prev_dropped_mask = None  # torch.BoolTensor per env
-    falls_per_step = []  # list[int] number of new falls at each step
-    # episode-based net yaw tracking (displacement from start per trial)
-    init_quat = None  # torch.Tensor (N,4)
-    prev_yaw = None  # torch.Tensor (N,) - previous step yaw angle for velocity computation
-    net_yaw_trials = []  # list[float]
-    # running statistics for trial_net_yaw (Welford's algorithm)
-    trial_net_yaw_count = 0  # int
-    trial_net_yaw_mean = 0.0  # float
-    trial_net_yaw_M2 = 0.0  # float, sum of squared differences from mean
-    # per-env fall counters per trial
-    current_trial_fallen = None  # torch.BoolTensor (N,)
-    fallen_trials = None  # torch.IntTensor (N,)
-    total_trials_env = None  # torch.IntTensor (N,)
+    # =========================================================================
+    # METRIC TRACKING BUFFERS
+    # =========================================================================
+    
+    # Per-env running buffers
+    current_env_yaw = torch.zeros(num_envs, device=device, dtype=torch.float32)
+    prev_raw_yaw = torch.zeros(num_envs, device=device, dtype=torch.float32)
+    
+    # Drop Latch: If true at ANY point in the episode, it counts as a drop.
+    # We rely on this because the final frame might be auto-reset.
+    has_fallen_latch = torch.zeros(num_envs, device=device, dtype=torch.bool)
+    
+    # Track which envs just reset to prevent calculating rotation jumps
+    just_reset_mask = torch.ones(num_envs, device=device, dtype=torch.bool)
 
-    # reset environment
+    # Storage for completed episodes
+    # We store: [net_yaw_radians, is_dropped (0/1)]
+    completed_episodes_data = []
+
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
-    timestep = 0  # used when recording video
-    global_step = 0
-    # required: enables the flag for batched observations
+    
+    # Initialize previous yaw with the starting state
+    with torch.inference_mode():
+        try:
+            screwdriver = base_env.scene["screwdriver"]
+            R = matrix_from_quat(screwdriver.data.root_quat_w)
+            prev_raw_yaw = torch.atan2(R[:, 1, 0], R[:, 0, 0])
+        except:
+            pass
+
+    timestep = 0
     _ = agent.get_batch_size(obs, 1)
-    # initialize RNN states if used
     if agent.is_rnn:
         agent.init_rnn()
-    # simulate environment
-    # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
-    #   attempt to have complete control over environment stepping. However, this removes other
-    #   operations such as masking that is used for multi-agent learning by RL-Games.
+
+    print(f"[INFO] Starting evaluation. Target: {args_cli.runs} episodes.")
+
     while simulation_app.is_running():
         start_time = time.time()
-        # run everything in inference mode
+        
         with torch.inference_mode():
-            # compute pre-step relative yaw from starting orientation
-            try:
-                screwdriver_pre = base_env.scene["screwdriver"]
-                quat_pre = screwdriver_pre.data.root_quat_w  # (N,4)
-                if init_quat is None or init_quat.shape != quat_pre.shape:
-                    init_quat = quat_pre.clone()
-                R_pre = matrix_from_quat(quat_pre)
-                R_init = matrix_from_quat(init_quat)
-                R_rel_pre = torch.bmm(R_pre, R_init.transpose(-2, -1))
-                yaw_rel_pre = torch.atan2(R_rel_pre[:, 1, 0], R_rel_pre[:, 0, 0])  # (N,)
-            except Exception:
-                yaw_rel_pre = None
-            # initialize per-env fall tracking buffers once
-            if current_trial_fallen is None:
-                num_envs_local = base_env.num_envs
-                device_local = base_env.device
-                current_trial_fallen = torch.zeros(num_envs_local, dtype=torch.bool, device=device_local)
-                fallen_trials = torch.zeros(num_envs_local, dtype=torch.int32, device=device_local)
-                total_trials_env = torch.zeros(num_envs_local, dtype=torch.int32, device=device_local)
-            # convert obs to agent format
-            obs = agent.obs_to_torch(obs)
-            # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
-            # env stepping
-            obs, _, dones, _ = env.step(actions)
-
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
-
-            # track completed runs (episodes). In this play loop, dones is a 1D mask per env.
-            # Count how many envs ended at this step; accumulate towards --runs if provided.
-            # Note: extras may contain per-episode logs; here we just count terminations.
-            # If asymmetric truncations/terminations matter, both are already in dones.
-            completed_this_step = int(dones.sum().item()) if hasattr(dones, "sum") else 0
-            done_ids_tensor = torch.nonzero(dones, as_tuple=False).flatten() if completed_this_step > 0 else None
-
-            # ---- metrics: screwdriver rotation and drop-rate ----
+            # 1. PRE-STEP: Measure State and Detect Falls
+            # We do this BEFORE env.step() to capture the state before any potential auto-reset
             try:
                 screwdriver = base_env.scene["screwdriver"]
-                quat_w = screwdriver.data.root_quat_w    # (N, 4) wxyz
-                R = matrix_from_quat(quat_w)             # (N, 3, 3)
+                # Get orientation quaternion (w, x, y, z)
+                quat_w = screwdriver.data.root_quat_w
+                R = matrix_from_quat(quat_w)
                 
-                # Compute current yaw angle from quaternion (relative to initial orientation)
-                if init_quat is None or init_quat.shape != quat_w.shape:
-                    init_quat = quat_w.clone()
-                R_init = matrix_from_quat(init_quat)
-                R_rel = torch.bmm(R, R_init.transpose(-2, -1))
-                current_yaw = torch.atan2(R_rel[:, 1, 0], R_rel[:, 0, 0])  # (N,)
+                # --- Rotation Logic ---
+                # Calculate Raw Yaw (Z-rotation) using atan2(R[1,0], R[0,0])
+                # This gives the global yaw orientation in [-pi, pi]
+                raw_yaw = torch.atan2(R[:, 1, 0], R[:, 0, 0])
                 
-                # Compute yaw velocity from orientation change (more reliable than physics engine)
-                if prev_yaw is None or prev_yaw.shape[0] != current_yaw.shape[0]:
-                    # First iteration: initialize and return 0 velocity
-                    prev_yaw = current_yaw.clone()
-                    yaw_cumulative = torch.zeros_like(current_yaw)
-                    prev_done_mask = torch.zeros_like(current_yaw, dtype=torch.bool)
-                    yaw_signed = torch.zeros_like(current_yaw)
-                else:
-                    # Reset yaw tracking for environments that were done in previous step
-                    if prev_done_mask is not None and prev_done_mask.any():
-                        yaw_cumulative[prev_done_mask] = 0.0
-                        prev_yaw[prev_done_mask] = current_yaw[prev_done_mask].clone()
-                    
-                    # Compute yaw velocity: (current - prev) / dt with angle unwrapping
-                    yaw_diff = current_yaw - prev_yaw
-                    # Unwrap angles: if difference > pi, subtract 2*pi; if < -pi, add 2*pi
-                    yaw_diff = yaw_diff - 2 * math.pi * torch.round(yaw_diff / (2 * math.pi))
-                    yaw_signed = yaw_diff / dt  # (N,) yaw velocity in rad/s
-                    
-                    # Update prev_yaw for next step
-                    prev_yaw = current_yaw.clone()
+                # Calculate Delta Yaw (Unwrapped)
+                yaw_diff = raw_yaw - prev_raw_yaw
+                # Wrap diff to [-pi, pi] to handle the jump boundary
+                # e.g., if jumping from 3.1 to -3.1, diff is -6.2 -> wrapped is +0.08
+                yaw_diff = (yaw_diff + math.pi) % (2 * math.pi) - math.pi
                 
-                yaw_speed = yaw_signed.abs()  # (N,)
-                step_yaw_signed_mean = float(yaw_signed.mean().item())
+                # Accumulate, but ONLY for envs that didn't just reset in the last frame
+                # (If they just reset, yaw_diff is the jump from End -> Start, which is garbage)
+                valid_step_mask = ~just_reset_mask
+                current_env_yaw[valid_step_mask] += yaw_diff[valid_step_mask]
                 
-                # Accumulate yaw for all environments (using computed velocity)
-                yaw_cumulative = yaw_cumulative + yaw_signed * dt
-                
-                # capture trial net yaw for done envs using cumulative yaw (unwrapped) - after updating cumulative
-                if done_ids_tensor is not None and done_ids_tensor.numel() > 0:
-                    for idx in done_ids_tensor.tolist():
-                        # Use cumulative yaw which tracks unwrapped total rotation
-                        trial_value = float(torch.abs(yaw_cumulative[idx]).item())
-                        net_yaw_trials.append(trial_value)
-                        # update running statistics using Welford's algorithm
-                        trial_net_yaw_count += 1
-                        delta = trial_value - trial_net_yaw_mean
-                        trial_net_yaw_mean += delta / trial_net_yaw_count
-                        delta2 = trial_value - trial_net_yaw_mean
-                        trial_net_yaw_M2 += delta * delta2
-                        # Note: yaw_cumulative will be reset at start of next iteration via prev_done_mask
+                # Update previous buffer
+                prev_raw_yaw = raw_yaw.clone()
 
-                # fall detection based on pitch/roll > threshold (upright deviation)
-                pos_w = screwdriver.data.root_pos_w      # (N, 3)
-                quat_w = screwdriver.data.root_quat_w    # (N, 4)
-                R = matrix_from_quat(quat_w)             # (N, 3, 3)
-                # local z-axis of screwdriver in world
-                z_axis = R[:, :, 2]                      # (N, 3)
-                cos_theta = torch.clamp(z_axis[:, 2], -1.0, 1.0)
-                threshold_cos = math.cos(math.radians(args_cli.fall_angle_deg))
-                dropped = cos_theta < threshold_cos
-                # detect new fall events (transition false->true)
-                if prev_dropped_mask is None or prev_dropped_mask.shape[0] != dropped.shape[0]:
-                    prev_dropped_mask = torch.zeros_like(dropped, dtype=torch.bool)
-                new_falls_mask = (~prev_dropped_mask) & dropped
-                falls_count = int(new_falls_mask.sum().item())
-                if falls_count and args_cli.log_fall_envs:
-                    env_ids = torch.nonzero(new_falls_mask, as_tuple=False).flatten().tolist()
-                    print(f"[FALL] step={global_step} envs={env_ids}")
-                prev_dropped_mask = dropped.clone()
-                falls_per_step.append(falls_count)
-                # mark envs that have fallen in this trial
-                if current_trial_fallen is not None:
-                    current_trial_fallen |= dropped
+                # --- Fall detection logic ---
+                # Z-axis of screwdriver is the 3rd column of R
+                z_axis = R[:, :, 2] # (N, 3)
+                # Dot product with world Up (0,0,1) is just the z component
+                cos_theta = z_axis[:, 2]
+                # Check if below threshold
+                fall_thresh_cos = math.cos(math.radians(args_cli.fall_angle_deg))
+                current_frame_fallen = cos_theta < fall_thresh_cos # Boolean tensor
+
+                # Latch it: If it was ever fallen in this episode, keep it True
+                # (But ignore falls calculated on the very first frame of a reset)
+                has_fallen_latch[valid_step_mask] |= current_frame_fallen[valid_step_mask]
                 
-                # update per-env fall counters for done envs
-                if done_ids_tensor is not None and done_ids_tensor.numel() > 0:
-                    if total_trials_env is not None:
-                        total_trials_env[done_ids_tensor] += 1
-                        fallen_trials[done_ids_tensor] += current_trial_fallen[done_ids_tensor].to(torch.int32)
-                        current_trial_fallen[done_ids_tensor] = False
+                # Clear the reset mask now that we've processed the first frame
+                just_reset_mask[:] = False
 
-                step_yaw_mean = float(yaw_speed.mean().item())
-                step_drop_mean = float(dropped.float().mean().item())
-
-                rot_avg_accum += step_yaw_mean
-                drop_avg_accum += step_drop_mean
-                window_steps += 1
-
-                # record series
-                yaw_rate_series.append(step_yaw_mean)
-                drop_rate_series.append(step_drop_mean)
-                # wrapped avg net yaw across envs (to [-pi, pi]) and avg turns
-                avg_net_yaw = float(yaw_cumulative.mean().item())
-                net_yaw_unwrapped_series.append(avg_net_yaw)
-                # wrap to [-pi, pi]
-                pi = math.pi
-                wrapped = ((avg_net_yaw + pi) % (2 * pi)) - pi
-                net_yaw_series.append(wrapped)
-                # signed mean yaw rate and its integral over time
-                mean_signed_yaw_rate_series.append(step_yaw_signed_mean)
-                prev_ny = net_yaw_from_mean_series[-1] if net_yaw_from_mean_series else 0.0
-                net_yaw_from_mean_series.append(prev_ny + step_yaw_signed_mean * dt)
-
-                if window_steps >= log_interval:
-                    print(
-                        f"[METRICS] step={global_step:06d} avg|yaw_rate|={rot_avg_accum / window_steps:.3f} rad/s, "
-                        f"drop_rate={drop_avg_accum / window_steps:.3f}, "
-                        f"avg_net_yaw_wrapped={wrapped:.3f} rad, "
-                        f"avg_turns={avg_net_yaw / (2 * math.pi):.3f}, "
-                        f"mean_signed_yaw_rate={step_yaw_signed_mean:.3f} rad/s, "
-                        f"net_yaw_from_mean={net_yaw_from_mean_series[-1]:.3f} rad"
-                    )
-                    rot_avg_accum = 0.0
-                    drop_avg_accum = 0.0
-                    window_steps = 0
-
-                # Stop after enough samples collected
-                if len(yaw_rate_series) >= args_cli.samples:
-                    break
-                
-                # Update prev_done_mask for next iteration (to reset yaw_cumulative at start of new trials)
-                if hasattr(dones, 'clone'):
-                    prev_done_mask = dones.clone()
-                elif hasattr(dones, '__iter__'):
-                    # Convert to tensor if it's a list/array
-                    if prev_done_mask is not None:
-                        prev_done_mask = torch.tensor(dones, device=prev_done_mask.device, dtype=torch.bool)
-                    else:
-                        prev_done_mask = torch.tensor(dones, dtype=torch.bool)
-            except Exception:
-                # Keep play robust even if task doesn't include the screwdriver
+            except Exception as e:
+                # Fail gracefully if object not found (e.g. unexpected env config)
+                # print(f"[WARN] {e}")
                 pass
-            # If we are counting runs, break when reaching the target
-            if args_cli.runs is not None and args_cli.runs > 0:
-                run_count += completed_this_step
-                if run_count >= args_cli.runs:
-                    break
+
+            # 3. Agent Step
+            obs = agent.obs_to_torch(obs)
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            obs, _, dones, _ = env.step(actions)
+
+            # 5. Process Completed Episodes
+            # 'dones' identifies envs that finished this step (timeout or dropped)
+            done_indices = torch.nonzero(dones, as_tuple=False).flatten()
+            
+            if len(done_indices) > 0:
+                if agent.is_rnn and agent.states is not None:
+                    for s in agent.states:
+                        s[:, done_indices, :] = 0.0
+                
+                for env_idx in done_indices:
+                    # Get final metrics for this specific env
+                    final_yaw = float(current_env_yaw[env_idx].item())
+                    dropped = bool(has_fallen_latch[env_idx].item())
+                    
+                    # Store data
+                    completed_episodes_data.append({
+                        "net_yaw": final_yaw,
+                        "dropped": dropped
+                    })
+                    
+                    # Reset metric buffer for this env
+                    current_env_yaw[env_idx] = 0.0
+                    has_fallen_latch[env_idx] = False
+                    
+                    # Mark this env as "Just Reset" so we skip the metrics calc 
+                    # on the very next loop iteration (start of new episode)
+                    just_reset_mask[env_idx] = True
+
+                count = len(completed_episodes_data)
+                if count % 10 == 0:
+                    print(f"[PROGRESS] Collected {count}/{args_cli.runs} episodes...")
+
+            # 6. Stopping Condition
+            if len(completed_episodes_data) >= args_cli.runs:
+                print(f"[INFO] Reached target of {args_cli.runs} episodes.")
+                break
+
         if args_cli.video:
             timestep += 1
-            # exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
-        global_step += 1
 
-        # time delay for real-time evaluation
+        # Real-time delay
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
 
-    # Collate and print summary; optionally save to CSV
-    total = len(yaw_rate_series)
-    if total > 0:
-        yaw_mean = sum(yaw_rate_series) / total
-        drop_mean = sum(drop_rate_series) / total
-        final_avg_net_yaw_wrapped = net_yaw_series[-1] if net_yaw_series else 0.0
-        final_avg_turns = final_avg_net_yaw_wrapped / (2 * math.pi)
-        total_falls = sum(falls_per_step) if falls_per_step else 0
-        final_net_yaw_from_mean = net_yaw_from_mean_series[-1] if net_yaw_from_mean_series else 0.0
-        final_avg_net_yaw_unwrapped = net_yaw_unwrapped_series[-1] if net_yaw_unwrapped_series else 0.0
-        consistency_err = final_avg_net_yaw_unwrapped - final_net_yaw_from_mean
-        # per-trial displacement stats
-        trials_count = len(net_yaw_trials)
-        trials_mean = sum(net_yaw_trials)/trials_count if trials_count else 0.0
-        trials_max = max(net_yaw_trials) if trials_count else 0.0
-        # calculate standard deviation from running statistics (sample std dev for significance testing)
-        if trial_net_yaw_count > 1:
-            trial_net_yaw_std = math.sqrt(trial_net_yaw_M2 / (trial_net_yaw_count - 1))
-        elif trial_net_yaw_count == 1:
-            trial_net_yaw_std = 0.0
+    # =========================================================================
+    # SUMMARY AND LOGGING
+    # =========================================================================
+    
+    total_eps = len(completed_episodes_data)
+    if total_eps > 0:
+        # Filter only episodes that DID NOT drop for rotation calculation
+        successful_episodes = [d for d in completed_episodes_data if not d["dropped"]]
+        successful_yaws = [d["net_yaw"] for d in successful_episodes]
+        drops = [d["dropped"] for d in completed_episodes_data]
+        
+        # Calculate Statistics
+        num_success = len(successful_yaws)
+        if num_success > 0:
+            avg_yaw = sum(successful_yaws) / num_success
+            avg_turns = avg_yaw / (2 * math.pi)
         else:
-            trial_net_yaw_std = 0.0
-        # overall fall fraction across all envs and trials
-        total_trials_sum = int(total_trials_env.sum().item()) if total_trials_env is not None else 0
-        fallen_trials_sum = int(fallen_trials.sum().item()) if fallen_trials is not None else 0
-        fall_fraction = (fallen_trials_sum / total_trials_sum) if total_trials_sum > 0 else 0.0
-        print(f"[SUMMARY] mean_trial_net_yaw={trials_mean:.4f} rad, std_trial_net_yaw={trial_net_yaw_std:.4f} rad, fall_fraction={fall_fraction:.3f} ({fallen_trials_sum}/{total_trials_sum})")
+            avg_yaw = 0.0
+            avg_turns = 0.0
+
+        drop_count = sum(drops)
+        drop_rate = (drop_count / total_eps) * 100.0
+        
+        print("\n" + "="*40)
+        print(" FINAL METRICS SUMMARY ")
+        print("="*40)
+        print(f"Total Episodes    : {total_eps}")
+        print(f"Successful Episodes: {num_success}")
+        print(f"Avg Rotation (Success Only): {avg_yaw:.4f} rad ({avg_turns:.2f} turns)")
+        print(f"Total Drops       : {drop_count}")
+        print(f"Drop Rate         : {drop_rate:.2f}%")
+        print("="*40 + "\n")
+
+        # Write CSV
         if args_cli.metrics_out:
             with open(args_cli.metrics_out, "w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    "step",
-                    "yaw_rate_abs",
-                    "drop_rate",
-                    "mean_signed_yaw_rate",
-                    "avg_net_yaw_unwrapped",
-                    "avg_net_yaw_wrapped",
-                    "avg_turns",
-                    "net_yaw_from_mean",
-                    "falls_this_step",
-                ])
-                for i in range(total):
-                    y = yaw_rate_series[i]
-                    d = drop_rate_series[i]
-                    y_signed = mean_signed_yaw_rate_series[i]
-                    nyu = net_yaw_unwrapped_series[i]
-                    nyw = net_yaw_series[i]
-                    turns = nyw / (2 * math.pi)
-                    nym = net_yaw_from_mean_series[i]
-                    fcount = falls_per_step[i] if i < len(falls_per_step) else 0
-                    writer.writerow([i, y, d, y_signed, nyu, nyw, turns, nym, fcount])
-                # Also write per-trial displacements
-                writer.writerow([])
-                writer.writerow(["trial_index", "net_yaw_displacement_rad"])
-                for i, val in enumerate(net_yaw_trials):
-                    writer.writerow([i, val])
-                # Write summary statistics
-                writer.writerow([])
-                writer.writerow(["statistic", "value"])
-                writer.writerow(["mean_trial_net_yaw_rad", trials_mean])
-                writer.writerow(["std_trial_net_yaw_rad", trial_net_yaw_std])
-                writer.writerow(["count", trial_net_yaw_count])
-            print(f"[INFO] Wrote metrics CSV to: {args_cli.metrics_out}")
+                writer.writerow(["episode_id", "net_yaw_rad", "net_turns", "dropped"])
+                for i, data in enumerate(completed_episodes_data):
+                    writer.writerow([
+                        i, 
+                        f"{data['net_yaw']:.5f}", 
+                        f"{data['net_yaw']/(2*math.pi):.5f}", 
+                        1 if data['dropped'] else 0
+                    ])
+            print(f"[INFO] Metrics saved to {args_cli.metrics_out}")
+    else:
+        print("[WARN] No episodes completed.")
 
-    # close the simulator
     env.close()
 
-
 if __name__ == "__main__":
-    # run the main function
     main()
-    # close sim app
     simulation_app.close()

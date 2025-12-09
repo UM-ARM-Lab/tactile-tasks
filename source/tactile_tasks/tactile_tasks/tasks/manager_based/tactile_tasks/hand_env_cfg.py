@@ -436,7 +436,7 @@ def _discover_random_screwdriver_usds() -> list[str]:
     # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
     # base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
     base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/train"
-
+    #base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/test"
     # pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
     pattern = os.path.join(base_dir, "*.usd")
     return sorted(glob.glob(pattern))
@@ -1184,7 +1184,7 @@ def contact_forces_obs(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> to
         forces = torch.zeros((num_envs, num_bodies, 3), device=env.device)
     
     # Flatten the forces tensor: (num_envs, num_bodies, 3) -> (num_envs, num_bodies * 3)
-    return forces.flatten(start_dim=1)
+    return torch.clamp(forces.flatten(start_dim=1), -5.0, 5.0)
 
 
 def point_cloud_obs(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera")) -> torch.Tensor:

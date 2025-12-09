@@ -79,13 +79,13 @@ params:
     max_std: 1.0
     
     # Training schedule
-    max_epochs: 4000
+    max_epochs: 8000
     save_best_after: 100
     save_frequency: 50
     
     # Gradient and optimization settings
     grad_norm: 0.5  # Lowered for stability
-    entropy_coef: 0.003  # Lowered for stability
+    entropy_coef: 0.002  # Lowered for stability
     truncate_grads: True
     e_clip: 0.2
     
