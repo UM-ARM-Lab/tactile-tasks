@@ -11,13 +11,13 @@ from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
 CURRENT_DIR = str(pathlib.Path(__file__).resolve().parent)
 # Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
 PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+# Assets directory: .../tactile_tasks/source/tactile_tasks/assets
+ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 
 @configclass
 class ScrewdriverCfg(RigidObjectCfg):
     spawn = sim_utils.UsdFileCfg(
-        usd_path='/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/screwdriver_fric.usd',
-        # usd_path = '/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver/high_fric.usd',
-        # usd_path='/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/sd_root/usd_files/object/random_screwdrivers/random_screwdriver_0/screwdriver.usd',
+        usd_path=str(ASSETS_DIR / "usd" / "screwdriver" / "screwdriver_fric.usd"),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,  # Enable gravity so it rests on table
             rigid_body_enabled=True,

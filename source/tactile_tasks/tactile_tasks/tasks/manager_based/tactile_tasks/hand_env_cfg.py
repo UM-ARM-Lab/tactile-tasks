@@ -35,11 +35,17 @@ from isaaclab.sensors.camera import TiledCameraCfg
 from isaaclab.sensors.camera.utils import create_pointcloud_from_depth
 import os
 import glob
+import pathlib
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 from .arm_allegro import AllegroCfg
 from .screwdriver import ScrewdriverCfg
+
+# Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
+PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+# Assets directory: .../tactile_tasks/source/tactile_tasks/assets
+ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 
 # Scene definition
 # from hand_scene import AllegroSceneCfg
@@ -431,14 +437,10 @@ def add_screwdriver_rotation_markers(env, env_ids, asset_cfg: SceneEntityCfg = S
 def _discover_random_screwdriver_usds() -> list[str]:
     """Return all screwdriver USDs from the attached random set on disk.
 
-    Searches: .../usd_files/object/random_screwdrivers/**/screwdriver.usd
+    Searches: .../usd/screwdriver/variants/train/*.usd
     """
-    # base_dir = "/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/screwdriver"
-    # base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver"
-    base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/train"
-    #base_dir = "/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/screwdriver/variants/test"
-    # pattern = os.path.join(base_dir, "screwdriver_fric*.usd")
-    pattern = os.path.join(base_dir, "*.usd")
+    base_dir = ASSETS_DIR / "usd" / "screwdriver" / "variants" / "train"
+    pattern = str(base_dir / "*.usd")
     return sorted(glob.glob(pattern))
 
 
@@ -762,48 +764,6 @@ def screwdriver_tilt_exceeds(
     threshold_cos = math.cos(math.radians(threshold_deg))
     return cos_theta < threshold_cos
 
-# def screwdriver_signed_yaw_velocity_reward(
-#     env: ManagerBasedRLEnv,
-#     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
-#     *,
-#     degrees: bool = False,
-#     vmax: float | None = None,
-# ) -> torch.Tensor:
-#     """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
-    
-#     - Positive reward for negative yaw_vel (clockwise rotation)
-#     - Negative reward for positive yaw_vel (counter-clockwise rotation)
-#     - Symmetric: reward magnitude equals penalty magnitude
-#     """
-#     asset: RigidObject = env.scene[asset_cfg.name]
-    
-#     yaw_vel = screwdriver_yaw_velocity(env, asset_cfg=asset_cfg, degrees=degrees).squeeze(-1)
-#     # Normalize and clip instead of using an explicit gain
-#     # if vmax is not None and vmax > 0:
-#     #     norm = yaw_vel / vmax
-#     # else:
-#     #     norm = yaw_vel
-#     base = -torch.clamp(yaw_vel, -4.0, 4.0)
-#     # Gate by curriculum stage: Stage 0 = off; Stage 1+ = on
-#     stage = 1#_get_curriculum_stage(env)
-#     return base
-
-
-# def screwdriver_yaw_velocity(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False) -> torch.Tensor:
-#     """Return yaw angular velocity of the screwdriver in local frame.
-
-#     - Units: rad/s by default; set ``degrees=True`` for deg/s.
-#     - Shape: (num_envs, 1)
-#     """
-#     asset: RigidObject = env.scene[asset_cfg.name]
-#     ang_vel_w = asset.data.root_ang_vel_w
-#     quat = asset.data.root_quat_w
-#     rot_matrix = matrix_from_quat(quat)
-#     ang_vel_local = torch.bmm(rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)).squeeze(-1)
-#     yaw_vel = ang_vel_local[:, 2:3]
-#     if degrees:
-#         yaw_vel = yaw_vel * (180.0 / math.pi)
-#     return yaw_vel
 
 def screwdriver_signed_yaw_velocity_reward(
     env: ManagerBasedRLEnv,

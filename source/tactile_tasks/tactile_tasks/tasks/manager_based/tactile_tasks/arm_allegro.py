@@ -10,12 +10,15 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 import pathlib
 
 CURRENT_DIR = str(pathlib.Path(__file__).resolve().parent)
+# Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
+PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+# Assets directory: .../tactile_tasks/source/tactile_tasks/assets
+ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 
 @configclass
 class AllegroCfg(ArticulationCfg):
     spawn = sim_utils.UsdFileCfg(
-            # usd_path = f'/home/armlab/Documents/Github/tactile-tasks/tactile_tasks/source/tactile_tasks/assets/usd/arm_allegro_ft.usd',
-            usd_path = f'/home/shgupte/omniverse/tactile-tasks/source/tactile_tasks/assets/usd/allegro/arm_allegro.usd',
+            usd_path=str(ASSETS_DIR / "usd" / "allegro" / "arm_allegro.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             rigid_body_enabled=True,

@@ -1,135 +1,160 @@
-# Template for Isaac Lab Projects
+# Tactile Tasks - Isaac Lab Extension
 
 ## Overview
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+This repository contains a tactile manipulation project built on [Isaac Lab](https://isaac-sim.github.io/IsaacLab/), focusing on robotic manipulation tasks involving screwdriver manipulation with tactile sensing. The project provides reinforcement learning environments where an Allegro robotic hand learns to manipulate and rotate screwdrivers with and without tactile feedback.
 
 **Key Features:**
+- **Tactile Manipulation**: Environments for learning dexterous manipulation tasks with tactile sensing
+- **Screwdriver Tasks**: Multiple task variants including pure proprioceptive rotation and contact-aware rotation
+- **Pre-trained Models**: Includes trained checkpoints for demonstration purposes ()
+- **Coming Soon: Point Cloud Integration**: Eventual support for point cloud extraction as policyt observation.
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
-
-**Keywords:** extension, template, isaaclab
+**Available Tasks:**
+- `TurnScrewdriver-v0`: Basic screwdriver rotation task
+- `TurnScrewdriverContact-v0`: Contact-aware screwdriver manipulation
+- `TurnScrewdriverPointCloud-v0`: (Coming soon) Point cloud-based manipulation with visual perception
 
 ## Installation
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda installation as it simplifies calling Python scripts from the terminal.
+### Prerequisites
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
+1. **Install Isaac Lab**: Follow the [Isaac Lab installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
+   - We recommend using the conda (use Python 3.11)installation as it simplifies calling Python scripts from the terminal.
 
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+2. **Clone this repository**: Clone or copy this repository separately from the Isaac Lab installation (i.e., outside the `IsaacLab` directory).
 
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/tactile_tasks
+### Setup
 
-- Verify that the extension is correctly installed by:
+1. **Install the extension**: Using a Python interpreter that has Isaac Lab installed, install the library in editable mode:
 
-    - Listing the available tasks:
+   ```bash
+   # Use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+   python -m pip install -e source/tactile_tasks
+   ```
 
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
+2. **Verify installation**: List available tasks to verify the extension is correctly installed:
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
+   ```bash
+   # Use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+   python scripts/list_envs.py
+   ```
 
-    - Running a task:
+   Note: If the task names change, you may need to update the search pattern `"Template-"` in `scripts/list_envs.py` to list them correctly.
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
+## Running the Demo
 
-    - Running a task with dummy agents:
+### Play Policy Demo
 
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
-
-        - Zero-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
-            ```
-        - Random-action agent
-
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
-            ```
-
-### Set up IDE (Optional)
-
-To setup the IDE, please follow these instructions:
-
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
-
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
-
-### Setup as Omniverse Extension (Optional)
-
-We provide an example UI extension that will load upon enabling your extension defined in `source/tactile_tasks/tactile_tasks/ui_extension_example.py`.
-
-To enable your extension, follow these steps:
-
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
-
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
-
-## Code formatting
-
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
+The repository includes a pre-trained checkpoint for the `TurnScrewdriver-v0`and `TurnScrewdriverContact-v0` task. Run the demo using the provided script:
 
 ```bash
-pip install pre-commit
+# Run with default task (TurnScrewdriver-v0) and baseline checkpoint
+./scripts/play_policy.sh
+
+# Run with baseline/proprioceptive checkpoint:
+
+./scripts/play_policy.sh --proprio
+
+# Run with contact-aware checkpoint
+./scripts/play_policy.sh --contact
+
+# Specify a different task with checkpoint type
+./scripts/play_policy.sh TurnScrewdriver-v0 --contact
+./scripts/play_policy.sh --baseline TurnScrewdriver-v0
 ```
 
-Then you can run pre-commit with:
+**What the demo does:**
+- Loads a pre-trained reinforcement learning policy from the selected checkpoint:
+  - **Baseline (Proprioceptive)**: `scripts/rl_games/successful_checkpoints/FinalProprio.pth` (default)
+  - **Contact-aware**: `scripts/rl_games/successful_checkpoints/FinalContact.pth`
+- Runs the policy in a simulated environment with 16 parallel environments
+- Shows the Allegro hand manipulating and rotating a screwdriver using learned tactile manipulation skills, with a variety of different screwdriver geometries.
+- Demonstrates the learned dexterous manipulation capabilities
+
+**Demo Parameters:**
+- **Checkpoint selection**: Use `--proprio` for proprioceptive-only policy (default) or `--contact` for contact-aware policy
+- **Task**: `TurnScrewdriver-v0` (default) or `TurnScrewdriverContact-v0`
+- **Number of environments**: 16
+- **Rendering**: Interactive visualization in Isaac Sim
+
+### Additional Demo Options
+
+You can also run the play script directly with custom parameters:
 
 ```bash
-pre-commit run --all-files
+# Run with baseline/proprioceptive checkpoint
+python scripts/rl_games/play.py \
+    --task TurnScrewdriver-v0 \
+    --checkpoint scripts/rl_games/successful_checkpoints/FinalProprio.pth \
+    --num_envs 16
+
+# Run with contact-aware checkpoint
+python scripts/rl_games/play.py \
+    --task TurnScrewdriver-v0 \
+    --checkpoint scripts/rl_games/successful_checkpoints/FinalContact.pth \
+    --num_envs 16
+```
+
+## Training
+
+To train your own policy, use the training scripts:
+
+```bash
+# Train with RL-Games
+python scripts/rl_games/train.py --task=TurnScrewdriver-v0
+
+# Train with contact sensing
+python scripts/rl_games/train.py --task=TurnScrewdriverContact-v0
+
+# Train with PointNet (for point cloud-based tasks)
+python scripts/rl_games/train_with_pointnet.py --task=TurnScrewdriverPointCloud-v0
+```
+
+## Project Structure
+
+```
+tactile-tasks/
+├── source/
+│   └── tactile_tasks/          # Main extension package
+│       ├── tasks/               # Task implementations
+│       │   ├── direct/          # Direct RL environments
+│       │   └── manager_based/   # Manager-based RL environments
+│       └── assets/              # 3D assets (screwdrivers, hands, etc.)
+├── scripts/
+│   ├── play_policy.sh          # Demo script
+│   ├── rl_games/               # RL-Games training/playback scripts
+│   │   └── successful_checkpoints/  # Pre-trained models
+│   └── list_envs.py            # List available environments
+└── README.md                    # This file
 ```
 
 ## Troubleshooting
 
-### Pylance Missing Indexing of Extensions
+### Checkpoint Not Found
 
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
+If you encounter an error about the checkpoint not being found:
+- Ensure the checkpoint file exists:
+  - `scripts/rl_games/successful_checkpoints/FinalProprio.pth` (for baseline/proprioceptive)
+  - `scripts/rl_games/successful_checkpoints/FinalContact.pth` (for contact-aware)
+- Check that you're running the script from the project root directory
+- Verify you're using the correct flag (`--baseline` or `--contact`)
 
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-ext-repo>/source/tactile_tasks"
-    ]
-}
-```
+### Environment Not Found
 
-### Pylance Crash
+If the task environment is not recognized:
+- Verify the extension is installed: `python -m pip list | grep tactile-tasks`
+- Reinstall if needed: `python -m pip install -e source/tactile_tasks`
+- Check that Isaac Lab is properly installed and activated
 
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
+## Additional Resources
+- **Isaac Lab Documentation**: https://isaac-sim.github.io/IsaacLab/
+- **Extension Setup**: See the original template README sections below for IDE setup and Omniverse extension configuration
 
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
-...
-```
+## License
+
+This project is licensed under the Apache-2.0 License.
+
+## Acknowledgments
+
+Built on [Isaac Lab](https://github.com/isaac-sim/IsaacLab) by NVIDIA.
