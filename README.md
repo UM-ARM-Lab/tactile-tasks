@@ -1,4 +1,4 @@
-# Tactile Tasks - Isaac Lab Extension
+# Tactile Tasks - Comparing Contact-Aware Policies for RL Dexterous Manipulation
 
 ## Overview
 
