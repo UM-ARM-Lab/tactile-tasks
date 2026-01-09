@@ -16,23 +16,23 @@ from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RL-Games.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--video_length", type=int, default=600, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_interval", type=int, default=10000, help="Interval between video recordings (in steps).")
+parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments to simulate.")
+parser.add_argument("--task", type=str, default="TurnScrewdriver-v0", help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
-parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--wandb-project-name", type=str, default=None, help="the wandb's project name")
-parser.add_argument("--wandb-entity", type=str, default=None, help="the entity (team) of wandb's project")
-parser.add_argument("--wandb-name", type=str, default=None, help="the name of wandb's run")
+parser.add_argument("--max_iterations", type=int, default=10000, help="RL Policy training iterations.")
+parser.add_argument("--wandb-project-name", type=str, default="tactile-tasks-train", help="the wandb's project name")
+parser.add_argument("--wandb-entity", type=str, default="evanchou-shanghai-jiaotong-university", help="the entity (team) of wandb's project")
+parser.add_argument("--wandb-name", type=str, default="TurnScrewdriver-v0", help="the name of wandb's run")
 parser.add_argument(
     "--track",
     type=lambda x: bool(strtobool(x)),
@@ -49,6 +49,11 @@ args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
+    # If no display is available, ensure headless mode is enabled
+    import os
+    if not args_cli.headless and os.environ.get('DISPLAY', '') == '':
+        print("[INFO] No DISPLAY found - enabling headless mode for video recording")
+        args_cli.headless = True
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -79,7 +84,7 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.io import dump_yaml
 
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
@@ -142,7 +147,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # specify directory for logging experiments
     config_name = agent_cfg["params"]["config"]["name"]
-    log_root_path = os.path.join("logs", "rl_games", config_name)
+    log_root_path = "/home/yifan/workspace/ndf_robot/narstie/model_weights/tactile-tasks/TurnScrewdriver_debug"
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs
@@ -157,8 +162,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_root_path, log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_root_path, log_dir, "params", "agent.pkl"), agent_cfg)
 
     # read configurations about the agent-training
     rl_device = agent_cfg["params"]["config"]["device"]

@@ -89,7 +89,7 @@ else
 fi
 
 # Number of environments
-NUM_ENVS=16
+NUM_ENVS=1
 
 # Check if checkpoint exists
 if [ ! -f "$CHECKPOINT_PATH" ]; then
@@ -116,6 +116,8 @@ echo "Running task: $TASK_NAME"
 # Run the play script
 python scripts/rl_games/play.py \
     --task "$TASK_NAME" \
-    --checkpoint "$CHECKPOINT_PATH" \
-    --num_envs "$NUM_ENVS"
+    --checkpoint "/home/yifan/workspace/ndf_robot/narstie/model_weights/tactile-tasks/TurnScrewdriver_train/2026-01-09_00-23-24/nn/hand_manipulation_ppo.pth" \
+    --num_envs "$NUM_ENVS" \
+    --video \
+    --video_length 800
 

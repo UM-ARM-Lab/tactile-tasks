@@ -11,7 +11,7 @@ import pathlib
 
 CURRENT_DIR = str(pathlib.Path(__file__).resolve().parent)
 # Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
-PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
 # Assets directory: .../tactile_tasks/source/tactile_tasks/assets
 ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 

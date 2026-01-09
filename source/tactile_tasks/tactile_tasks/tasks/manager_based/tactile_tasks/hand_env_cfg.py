@@ -43,7 +43,7 @@ from .arm_allegro import AllegroCfg
 from .screwdriver import ScrewdriverCfg
 
 # Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
-PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
 # Assets directory: .../tactile_tasks/source/tactile_tasks/assets
 ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 
