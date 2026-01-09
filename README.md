@@ -2,6 +2,10 @@
 
 ## Overview
 
+[Video of tasks in action and results](https://drive.google.com/file/d/1FzvBhCHI8p7OkBrFRWhaGKibqUaZuAHH/view?usp=sharing)
+
+[Written final report summarizing findings](https://drive.google.com/file/d/1DhuGXiD1w4lh0pmQDoyXITcRXCiVHe4d/view?usp=sharing)
+
 This repository contains a tactile manipulation project built on [Isaac Lab](https://isaac-sim.github.io/IsaacLab/), focusing on robotic manipulation tasks involving screwdriver manipulation with tactile sensing. The project provides reinforcement learning environments where an Allegro robotic hand learns to manipulate and rotate screwdrivers with and without tactile feedback.
 
 **Key Features:**
