@@ -17,19 +17,18 @@ simulation_app = app_launcher.app
 
 # import after launching the app
 import gymnasium as gym
-from tactile_tasks.tasks.manager_based.tactile_tasks.hand_env_cfg import TestCameraEnvCfg
+from tactile_tasks.tasks.manager_based.tactile_tasks.hand_env_cfg import TurnScrewdriverPointCloudEnvCfg
 
 
 def test_camera_environment():
     """Test the camera environment and point cloud extraction."""
     
-    # Create the environment
-    env_cfg = TestCameraEnvCfg()
+    env_cfg = TurnScrewdriverPointCloudEnvCfg()
     env_cfg.scene.num_envs = 4  # Use fewer environments for testing
     env_cfg.scene.env_spacing = 2.0  # Reduce spacing for better visibility
     
     # Create the environment
-    env = gym.make("Isaac-Template-TactileTasks-v0", cfg=env_cfg)
+    env = gym.make("TurnScrewdriverPointCloud-v0", cfg=env_cfg)
     
     print("Environment created successfully!")
     print(f"Number of environments: {env.num_envs}")

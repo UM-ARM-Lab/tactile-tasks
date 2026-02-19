@@ -1,15 +1,10 @@
+import pathlib
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import AssetBaseCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
-import pathlib
-
-CURRENT_DIR = str(pathlib.Path(__file__).resolve().parent)
 # Package root: .../tactile_tasks/source/tactile_tasks/tactile_tasks
 PACKAGE_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 # Assets directory: .../tactile_tasks/source/tactile_tasks/assets

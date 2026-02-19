@@ -27,8 +27,12 @@ from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
-from arm_allegro import AllegroCfg
-from screwdriver import ScrewdriverCfg
+try:
+    from .arm_allegro import AllegroCfg
+    from .screwdriver import ScrewdriverCfg
+except ImportError:
+    from arm_allegro import AllegroCfg
+    from screwdriver import ScrewdriverCfg
 
 # Import USD and PhysX APIs for joint creation
 from pxr import Usd, UsdPhysics, Gf, Sdf
@@ -36,8 +40,8 @@ from isaacsim.core.utils.stage import get_current_stage
 
 
 @configclass
-class TestSceneCfg(InteractiveSceneCfg):
-    """Configuration for testing the screwdriver scene."""
+class ScrewdriverTestSceneCfg(InteractiveSceneCfg):
+    """Configuration for testing the screwdriver scene with table and tip constraints."""
 
     # ground plane
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
@@ -145,7 +149,7 @@ def main():
     sim.set_camera_view([2.5, 0.0, 4.0], [0.0, 0.0, 2.0])
     
     # Design scene
-    scene_cfg = TestSceneCfg(num_envs=args_cli.num_envs, env_spacing=2.0)
+    scene_cfg = ScrewdriverTestSceneCfg(num_envs=args_cli.num_envs, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
     
     # Play the simulator
@@ -171,7 +175,7 @@ def visualize_starting_position():
     print("🎬 Starting position visualization...")
     
     # Create scene configuration with viewer enabled
-    scene_cfg = TestSceneCfg(num_envs=1, env_spacing=4.0)
+    scene_cfg = ScrewdriverTestSceneCfg(num_envs=1, env_spacing=4.0)
     
     # Create the scene
     scene = InteractiveScene(scene_cfg)
