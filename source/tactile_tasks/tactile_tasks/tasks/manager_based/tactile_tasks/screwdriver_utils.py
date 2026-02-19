@@ -13,7 +13,6 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.sim.utils import bind_physics_material
 from isaacsim.core.utils.stage import get_current_stage
-from omni.usd import get_context
 from pxr import Sdf, UsdGeom, UsdPhysics, PhysxSchema
 
 from .screwdriver import ScrewdriverCfg
@@ -24,7 +23,9 @@ ASSETS_DIR = PACKAGE_ROOT.parent / "assets"
 
 
 def recursively_uninstance_prim(prim):
-    """Recursively uninstance a prim and its children."""
+    """Recursively uninstance a prim and its children.
+    Required before per-env edits: USD instancing shares geometry across envs.
+    """
     if prim.IsInstance():
         prim.SetInstanceable(False)
     for child in prim.GetChildren():
@@ -36,6 +37,7 @@ def setup_screwdriver_tip_pivots(
 ) -> None:
     """
     Connects screwdriver tip to a fixed point in world space using a D6 joint with damping.
+    Simulates a pivot point (e.g. screw head): tip stays fixed, rotation allowed.
     """
     from pxr import Gf
 
@@ -49,6 +51,7 @@ def setup_screwdriver_tip_pivots(
         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
         base = f"/World/envs/env_{env_i}"
 
+        # Compute tip world position: root_pos + quat.rotate(tip_offset_local)
         root_pose = screwdriver.data.root_state_w[env_i, :7]
         pos = root_pose[:3].cpu().numpy()
         qw, qx, qy, qz = root_pose[3:].cpu().numpy()
@@ -56,6 +59,7 @@ def setup_screwdriver_tip_pivots(
         tip_off = Gf.Vec3d(*[float(v) for v in tip_offset_local])
         tip_world = Gf.Vec3d(*(pos.tolist())) + q.Transform(tip_off)
 
+        # D6 joint: Body0=world (implicit), Body1=screwdriver
         joint_path = f"{base}/TipSphericalJoint"
         if not stage.GetPrimAtPath(joint_path).IsValid():
             joint = UsdPhysics.Joint.Define(stage, joint_path)
@@ -70,11 +74,13 @@ def setup_screwdriver_tip_pivots(
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
 
         PhysxSchema.PhysxJointAPI.Apply(jp)
+        # Lock all translation (tip fixed in world)
         for axis in ["transX", "transY", "transZ"]:
             limit = UsdPhysics.LimitAPI.Apply(jp, axis)
             limit.CreateLowAttr().Set(0.0)
             limit.CreateHighAttr().Set(0.0)
 
+        # Free rotation only around Z (yaw): screwdriver spin axis, with damping
         for axis in ["rotZ"]:
             drive = UsdPhysics.DriveAPI.Apply(jp, axis)
             drive.CreateTypeAttr().Set("force")
@@ -90,6 +96,7 @@ def add_screwdriver_rotation_markers(
 
     stage = get_current_stage()
     screwdriver = env.scene[asset_cfg.name]
+    # Offset from center so marker traces a circle when screwdriver spins
     marker_local_offset = Gf.Vec3f(0.04, 0.0, 0.03)
     marker_radius = 0.004
 
@@ -98,7 +105,7 @@ def add_screwdriver_rotation_markers(
         screwdriver_prim_path = screwdriver.root_physx_view.prim_paths[env_i]
         screw_prim = stage.GetPrimAtPath(screwdriver_prim_path)
         if screw_prim.IsInstanceable():
-            screw_prim.SetInstanceable(False)
+            screw_prim.SetInstanceable(False)  # Must uninstance to add per-env child prims
         marker_prim_path = f"{screwdriver_prim_path}/RotationMarker"
 
         marker_prim = stage.GetPrimAtPath(marker_prim_path)
@@ -142,7 +149,9 @@ def randomize_screwdriver_geometry_prestartup(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
     usd_paths: list[str] | None = None,
 ) -> None:
-    """Swap each env's screwdriver USD reference before play starts."""
+    """Swap each env's screwdriver USD reference before play starts.
+    Domain randomization: different screwdriver geometries per env.
+    """
     import isaaclab.sim as sim_utils
 
     stage = get_current_stage()
@@ -155,7 +164,7 @@ def randomize_screwdriver_geometry_prestartup(
         return
 
     env_indices = list(range(len(prim_paths))) if env_ids is None else env_ids.tolist()
-    with Sdf.ChangeBlock():
+    with Sdf.ChangeBlock():  # Batch USD edits for efficiency
         for env_i in env_indices:
             prim_path = prim_paths[env_i]
             prim = stage.GetPrimAtPath(prim_path)
@@ -164,6 +173,7 @@ def randomize_screwdriver_geometry_prestartup(
             if prim.IsInstanceable():
                 prim.SetInstanceable(False)
             refs = prim.GetReferences()
+            # Deterministic per-env selection (131 prime avoids collision patterns)
             choice_idx = (env_i * 131 + (env.cfg.seed or 0)) % len(usd_paths)
             usd_path = usd_paths[choice_idx]
             refs.ClearReferences()
@@ -199,11 +209,13 @@ def get_camera_point_cloud(
             depth=env_depth,
             device=env.device,
         )
+        # Fixed size for PointNet: 1024 points (standard input size)
         num_samples = 1024
         if point_cloud.shape[0] >= num_samples:
             idx = torch.randperm(point_cloud.shape[0], device=point_cloud.device)[:num_samples]
             point_cloud = point_cloud[idx]
         else:
+            # If sparse: oversample with replacement to reach 1024
             repeat = num_samples - point_cloud.shape[0]
             extra = point_cloud[
                 torch.randint(point_cloud.shape[0], (repeat,), device=point_cloud.device)
@@ -222,7 +234,7 @@ def get_camera_point_cloud(
                 pc = torch.cat([pc, padding], dim=0)
             padded_point_clouds.append(pc)
         point_cloud_batch = torch.stack(padded_point_clouds, dim=0)
-        if env_frame:
+        if env_frame:  # Relative to env origin for translation-invariant policy
             env_indices_tensor = torch.tensor(env_indices, device=env.device, dtype=torch.long)
             env_origins = env.scene.env_origins[env_indices_tensor]
             point_cloud_batch = point_cloud_batch - env_origins.unsqueeze(1)

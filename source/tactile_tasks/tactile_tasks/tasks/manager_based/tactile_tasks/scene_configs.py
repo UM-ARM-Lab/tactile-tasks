@@ -20,6 +20,7 @@ from .screwdriver import ScrewdriverCfg
 class ScrewdriverSceneCfg(InteractiveSceneCfg):
     """Configuration for the screwdriver manipulation scene."""
 
+    # Allow per-env USD differences (needed for randomize_screwdriver_geometry_prestartup)
     replicate_physics = False
 
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
@@ -31,6 +32,7 @@ class ScrewdriverSceneCfg(InteractiveSceneCfg):
     screwdriver: AssetBaseCfg = ScrewdriverCfg(prim_path="{ENV_REGEX_NS}/Screwdriver")
     robot: ArticulationCfg = AllegroCfg(prim_path="{ENV_REGEX_NS}/Robot")
 
+    # Contact sensors on finger tip links (_aftc_base_link = Allegro finger tip collision)
     contact_forces: ContactSensorCfg = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*_aftc_base_link$",
         update_period=0.0,
@@ -47,7 +49,7 @@ class ScrewdriverSceneWithCameraCfg(ScrewdriverSceneCfg):
     tiled_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Camera",
         update_period=0.0,
-        data_types=["rgb", "distance_to_image_plane"],
+        data_types=["rgb", "distance_to_image_plane"],  # depth for point cloud
         width=32,
         height=32,
         colorize_semantic_segmentation=False,
@@ -59,6 +61,7 @@ class ScrewdriverSceneWithCameraCfg(ScrewdriverSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.05, 5.0),
         ),
+        # Camera positioned to side of hand, angled toward screwdriver
         offset=TiledCameraCfg.OffsetCfg(
             pos=(-0.2, 0.3, 0.3),
             rot=(0.224144, -0.129410, 0.836516, -0.482963),

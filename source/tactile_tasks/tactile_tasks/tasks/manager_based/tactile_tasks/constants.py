@@ -5,7 +5,8 @@
 
 """Shared constants for the screwdriver manipulation tasks."""
 
-# Allegro hand finger joint names (16 joints, in order)
+# Allegro hand finger joint names (16 joints, in order).
+# Naming: hitosashi=index, naka=middle, kusuri=ring, oya=thumb (Japanese).
 ALLEGRO_FINGER_JOINT_NAMES = [
     "allegro_hand_hitosashi_finger_finger_joint_0",
     "allegro_hand_hitosashi_finger_finger_joint_1",

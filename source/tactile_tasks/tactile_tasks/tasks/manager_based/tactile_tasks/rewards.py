@@ -20,12 +20,14 @@ from .observations import screwdriver_angular_velocity_z
 def screwdriver_upright_reward(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")
 ) -> torch.Tensor:
-    """Reward for keeping screwdriver upright (z-axis aligned with world z-axis)."""
+    """Reward for keeping screwdriver upright (z-axis aligned with world z-axis).
+    Zero reward if tilted >20°; squared scale from threshold to 1 for smooth gradient.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     quat = asset.data.root_quat_w
     rot_matrix = matrix_from_quat(quat)
     z_axis = rot_matrix[:, :, 2]
-    upright_alignment = z_axis[:, 2]
+    upright_alignment = z_axis[:, 2]  # Dot with world Z [0,0,1]
     threshold_cos_20_deg = math.cos(math.radians(20.0))
     upright_reward = torch.where(
         upright_alignment >= threshold_cos_20_deg,
@@ -40,7 +42,9 @@ def screwdriver_tilt_exceeds(
     threshold_deg: float = 25.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"),
 ) -> torch.Tensor:
-    """Return per-env boolean indicating tilt greater than threshold degrees."""
+    """Return per-env boolean: True when tilt exceeds threshold (for termination).
+    cos(theta) < cos(threshold) means angle > threshold.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     quat = asset.data.root_quat_w
     rot_matrix = matrix_from_quat(quat)
@@ -56,7 +60,9 @@ def screwdriver_signed_yaw_velocity_reward(
     degrees: bool = False,
     vmax: float | None = None,
 ) -> torch.Tensor:
-    """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise)."""
+    """Reward negative (clockwise) yaw velocity, penalize positive (counter-clockwise).
+    Clockwise = screwing in; only rewards when upright (within ~20°) to avoid wobble.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     yaw_vel = screwdriver_angular_velocity_z(env, asset_cfg=asset_cfg).squeeze(-1)
     if degrees:
@@ -67,14 +73,16 @@ def screwdriver_signed_yaw_velocity_reward(
     z_axis = rot_matrix[:, :, 2]
     upright_alignment = z_axis[:, 2]
     threshold_cos_20_deg = math.cos(math.radians(20.0))
-    upright_mask = (upright_alignment >= threshold_cos_20_deg).float()
+    upright_mask = (upright_alignment >= threshold_cos_20_deg).float()  # Zero reward if tilted
     return base_reward * upright_mask
 
 
 def screwdriver_stability_reward(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver"), degrees: bool = False
 ) -> torch.Tensor:
-    """L2 norm squared of local x/y angular velocity (penalize wobbling)."""
+    """Penalize local x/y angular velocity (wobbling); reward pure Z-axis spin.
+    Transform ang_vel to screwdriver frame, take xy components, return -||w_xy||^2.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     ang_vel_w = asset.data.root_ang_vel_w
     quat = asset.data.root_quat_w
@@ -82,7 +90,7 @@ def screwdriver_stability_reward(
     ang_vel_local = torch.bmm(
         rot_matrix.transpose(-2, -1), ang_vel_w.unsqueeze(-1)
     ).squeeze(-1)
-    vel_xy = ang_vel_local[:, :2]
+    vel_xy = ang_vel_local[:, :2]  # Tilt/wobble; Z is desired spin
     if degrees:
         vel_xy = vel_xy * (180.0 / math.pi)
     return -torch.sum(vel_xy * vel_xy, dim=1)
@@ -110,7 +118,9 @@ def energy_penalty_abs(
     joint_names: list[str] | None = None,
     scale: float = 5e-2,
 ) -> torch.Tensor:
-    """Penalize per-step mechanical energy via |tau * qd| integrated over dt."""
+    """Penalize per-step mechanical energy: -scale * sum(|tau * qd|) * dt.
+    Power = tau * qd; |power| avoids canceling positive/negative work.
+    """
     asset: Articulation = env.scene[asset_cfg.name]
     if joint_names is None:
         joint_ids = torch.arange(asset.num_joints, device=env.device)
@@ -126,7 +136,9 @@ def energy_penalty_abs(
 def finger_joint_deviation_penalty(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), degrees: bool = False
 ) -> torch.Tensor:
-    """Penalty for finger joints deviating from initial positions."""
+    """Penalty for finger joints deviating from initial positions.
+    Encourages finger gaiting: small penalty nudges policy to move fingers for rotation.
+    """
     asset: Articulation = env.scene[asset_cfg.name]
     joint_ids, _ = asset.find_joints(asset_cfg.joint_names, preserve_order=True)
     current_joint_pos = asset.data.joint_pos[:, joint_ids]
@@ -139,6 +151,6 @@ def finger_joint_deviation_penalty(
 
 
 def add_action_noise(env, std: float = 0.02):
-    """Add Gaussian noise to actions for exploration."""
+    """Add Gaussian noise to actions (pre_physics_step event) for exploration."""
     a = env.action_manager.action
     env.action_manager.action = torch.clamp(a + std * torch.randn_like(a), -1.0, 1.0)

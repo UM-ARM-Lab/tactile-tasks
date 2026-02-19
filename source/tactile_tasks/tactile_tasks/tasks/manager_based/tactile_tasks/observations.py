@@ -28,7 +28,9 @@ def joint_pos_in_order(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"))
 def screwdriver_pose(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")
 ) -> torch.Tensor:
-    """Screwdriver pose (position + quaternion) in the environment frame."""
+    """Screwdriver pose (position + quaternion) in the environment frame.
+    Env frame = world minus env_origins, so policy sees translation-invariant state.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     pos = asset.data.root_pos_w - env.scene.env_origins
     quat = asset.data.root_quat_w
@@ -38,7 +40,9 @@ def screwdriver_pose(
 def screwdriver_orientation_z_axis(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")
 ) -> torch.Tensor:
-    """Z-axis direction of the screwdriver in world frame."""
+    """Z-axis direction of the screwdriver in world frame.
+    Third column of rotation matrix; dot with [0,0,1] gives upright alignment.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     quat = asset.data.root_quat_w
     rot_matrix = matrix_from_quat(quat)
@@ -48,7 +52,9 @@ def screwdriver_orientation_z_axis(
 def screwdriver_yaw_angle_from_quaternion(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")
 ) -> torch.Tensor:
-    """Compute yaw angle of the screwdriver relative to its initial orientation."""
+    """Compute yaw angle of the screwdriver relative to its initial orientation.
+    R_rel = R @ R_init^T gives relative rotation; atan2 extracts yaw (rotation about Z).
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     quat = asset.data.root_quat_w
     R = matrix_from_quat(quat)
@@ -64,7 +70,10 @@ def screwdriver_yaw_angle_from_quaternion(
 def screwdriver_angular_velocity_z(
     env, asset_cfg: SceneEntityCfg = SceneEntityCfg("screwdriver")
 ) -> torch.Tensor:
-    """Angular velocity around screwdriver's z-axis computed from yaw angle differences."""
+    """Angular velocity around screwdriver's z-axis from finite difference of yaw angles.
+    Uses prev_yaw/last_yaw_seen to detect new physics step (avoids double-counting).
+    More reliable than raw physics ang_vel which can be noisy.
+    """
     if not hasattr(env, "_screwdriver_prev_yaw"):
         env._screwdriver_prev_yaw = torch.zeros(env.num_envs, device=env.device)
     if not hasattr(env, "_screwdriver_last_yaw_seen"):
@@ -76,11 +85,12 @@ def screwdriver_angular_velocity_z(
         is_new_step = True
     else:
         yaw_diff = torch.abs(current_yaw - env._screwdriver_last_yaw_seen)
-        if torch.any(yaw_diff > 1e-5):
+        if torch.any(yaw_diff > 1e-5):  # New physics step: yaw changed
             is_new_step = True
             env._screwdriver_prev_yaw = env._screwdriver_last_yaw_seen.clone()
 
     yaw_diff = current_yaw - env._screwdriver_prev_yaw
+    # Unwrap angles: handle -pi/pi discontinuity for correct velocity sign
     yaw_diff = yaw_diff - 2 * math.pi * torch.round(yaw_diff / (2 * math.pi))
     dt = env.physics_dt
     yaw_vel = yaw_diff / dt
@@ -113,7 +123,9 @@ def reset_screwdriver_yaw_tracking(env, env_ids: torch.Tensor = None) -> None:
 
 
 def contact_forces_obs(env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Observation function for contact forces from contact sensors."""
+    """Observation function for contact forces from contact sensors.
+    Flattens (num_envs, num_bodies, 3) to (num_envs, num_bodies*3); clamp for stability.
+    """
     sensor = env.scene[sensor_cfg.name]
     data = sensor.data
 
@@ -123,7 +135,7 @@ def contact_forces_obs(env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
         forces = data.forces_w
     else:
         num_envs = env.num_envs
-        num_bodies = 4
+        num_bodies = 4  # 4 Allegro finger tips
         forces = torch.zeros((num_envs, num_bodies, 3), device=env.device)
 
     return torch.clamp(forces.flatten(start_dim=1), -5.0, 5.0)
@@ -139,6 +151,7 @@ def point_cloud_obs(
 
 from isaaclab.utils import configclass
 
+# Shared obs term for joint positions (used by all observation configs)
 JOINT_POS_OBS_TERM = ObsTerm(
     func=joint_pos_in_order,
     noise=None,

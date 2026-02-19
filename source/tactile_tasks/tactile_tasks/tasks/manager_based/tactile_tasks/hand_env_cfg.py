@@ -7,7 +7,8 @@
 Environment configuration for screwdriver manipulation tasks.
 
 This module composes scene configs, actions, observations, rewards, terminations,
-and events into full environment configurations.
+and events into full environment configurations. Implementation details live in:
+  - scene_configs, screwdriver_utils, observations, rewards, curriculum
 """
 
 import isaaclab.envs.mdp as mdp
@@ -45,7 +46,7 @@ from .screwdriver_utils import (
 
 @configclass
 class ActionsCfg:
-    """Action specifications for the MDP."""
+    """Action specifications: relative joint position control for 16 Allegro fingers."""
 
     hand_joint_pos = mdp.RelativeJointPositionActionCfg(
         asset_name="robot",
@@ -254,7 +255,7 @@ class TurnScrewdriverPointCloudEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.solver_velocity_iteration_count = 4
 
 
-# Backward compatibility aliases
+# Backward compatibility aliases (old names still work for scripts)
 TestEnvCfg = TurnScrewdriverEnvCfg
 TestContactEnvCfg = TurnScrewdriverContactEnvCfg
 TestPointCloudEnvCfg = TurnScrewdriverPointCloudEnvCfg
